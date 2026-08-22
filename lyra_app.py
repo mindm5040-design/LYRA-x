@@ -82,6 +82,31 @@ div[data-baseweb="checkbox"] span, .stToggle {accent-color:#C15F3C!important;}
 .conv-btn button {
     text-align:left!important; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
+
+/* Empêche les rangées d'icônes (actions sous les réponses, barre d'outils)
+   de s'empiler verticalement sur mobile — les garde compactes et alignées,
+   comme la barre d'icônes de Claude. */
+div[data-testid="stHorizontalBlock"] {
+    flex-wrap: nowrap!important;
+    gap: 6px!important;
+    align-items: center!important;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+    width: fit-content!important;
+    min-width: 0!important;
+    flex: 0 0 auto!important;
+}
+div[data-testid="stHorizontalBlock"] .stButton button,
+div[data-testid="stHorizontalBlock"] .stDownloadButton button,
+div[data-testid="stHorizontalBlock"] .stPopover button {
+    padding: 6px 10px!important;
+    min-height: 34px!important;
+    font-size: 14px!important;
+    white-space: nowrap!important;
+}
+div[data-testid="stHorizontalBlock"] .stToggle {
+    transform: scale(0.85);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -354,330 +379,4 @@ def web_search_snippet(query: str) -> str:
         r = requests.get(
             "https://api.duckduckgo.com/",
             params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
-            timeout=8
-        )
-        r.raise_for_status()
-        data = r.json()
-        parts = []
-        if data.get("AbstractText"):
-            parts.append(data["AbstractText"])
-        for topic in data.get("RelatedTopics", [])[:3]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                parts.append(topic["Text"])
-        return "\n".join(parts)[:1500]
-    except requests.exceptions.RequestException:
-        return ""
-
-# --- 10. Upload de documents (pdf/txt) façon ChatGPT ------------------------
-# --- Lecture vocale des réponses (synthèse vocale du navigateur, sans clé API) ---
-def speak_button(text, key):
-    safe_text = json.dumps(text)
-    html = f"""
-    <button id="lyra-speak-{key}" style="
-        background:#ffffff;color:#1F1E1D;border:1px solid #E0DDD1;border-radius:10px;
-        padding:6px 12px;font-size:13px;cursor:pointer;font-family:Inter,sans-serif;">
-        🔊 Écouter
-    </button>
-    <script>
-    const btn_{key} = document.getElementById("lyra-speak-{key}");
-    btn_{key}.onclick = function() {{
-        const synth = window.speechSynthesis;
-        synth.cancel();
-        const utter = new SpeechSynthesisUtterance({safe_text});
-        utter.lang = "fr-FR";
-        synth.speak(utter);
-    }};
-    </script>
-    """
-    components.html(html, height=42)
-
-# --- Export PDF (nécessite fpdf2 ; repli propre si absent) -----------------
-def build_pdf(text):
-    try:
-        from fpdf import FPDF
-    except ImportError:
-        return None
-    try:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Helvetica", size=12)
-        pdf.set_auto_page_break(auto=True, margin=15)
-        clean = text.replace("**", "").replace("##", "").replace("#", "")
-        for line in clean.split("\n"):
-            pdf.multi_cell(0, 8, line.encode("latin-1", "replace").decode("latin-1"))
-        return bytes(pdf.output())
-    except Exception:
-        return None
-
-def extract_document_text(uploaded_file):
-    name = uploaded_file.name.lower()
-    if name.endswith(".txt"):
-        try:
-            return uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        except Exception:
-            return ""
-    if name.endswith(".pdf"):
-        try:
-            import PyPDF2
-            reader = PyPDF2.PdfReader(uploaded_file)
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-        except ImportError:
-            return "[PyPDF2 non installé : impossible d'extraire ce PDF côté serveur]"
-        except Exception:
-            return "[Impossible de lire ce PDF]"
-    return ""
-
-with st.sidebar:
-    st.markdown("## ✨ LYRA")
-    if not KEY:
-        st.markdown('<div class="lyra-warning">Clé GROQ_API_KEY absente des secrets.</div>', unsafe_allow_html=True)
-
-    if st.button("➕ Nouvelle conversation", use_container_width=True):
-        new_id = str(uuid.uuid4())
-        st.session_state.conversations[new_id] = {"title": "Nouvelle conversation", "messages": []}
-        st.session_state.current_conv = new_id
-        st.rerun()
-
-    st.caption("Conversations")
-    # --- 10. Historique des conversations façon ChatGPT ---
-    for conv_id, conv in list(st.session_state.conversations.items()):
-        cols = st.columns([5, 1])
-        active = conv_id == st.session_state.current_conv
-        with cols[0]:
-            st.markdown('<div class="conv-btn">', unsafe_allow_html=True)
-            if st.button(("🟢 " if active else "") + conv["title"], key=f"sel_{conv_id}", use_container_width=True):
-                st.session_state.current_conv = conv_id
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-        with cols[1]:
-            if len(st.session_state.conversations) > 1 and st.button("🗑️", key=f"del_{conv_id}"):
-                del st.session_state.conversations[conv_id]
-                if st.session_state.current_conv == conv_id:
-                    st.session_state.current_conv = next(iter(st.session_state.conversations))
-                st.rerun()
-
-    st.markdown("---")
-    cycle = st.segmented_control("Cycle", list(CYCLES.keys()), default=st.session_state.cycle)
-    if cycle: st.session_state.cycle = cycle
-    niveau = st.segmented_control("Niveau", CYCLES[st.session_state.cycle], default=st.session_state.niveau if st.session_state.niveau in CYCLES[st.session_state.cycle] else CYCLES[st.session_state.cycle][0])
-    if niveau: st.session_state.niveau = niveau
-    st.caption(f"🔒 Verrouillé sur {st.session_state.niveau}")
-
-    st.markdown("---")
-    theme_choice = st.radio("🎨 Thème", ["Clair", "Sombre"], index=0 if st.session_state.get("theme", "Clair") == "Clair" else 1, horizontal=True)
-    st.session_state.theme = theme_choice
-
-    st.markdown("---")
-    font_choice = st.select_slider("🔠 Taille du texte", options=["Petite", "Normale", "Grande"], value=st.session_state.font_size)
-    st.session_state.font_size = font_choice
-
-    st.markdown("---")
-    with st.expander("ℹ️ À propos de LYRA"):
-        st.caption("LYRA est une intelligence artificielle, pas un enseignant humain. Elle peut se tromper : vérifie toujours les points importants avec ton professeur.")
-        st.caption(PRIVACY_NOTE)
-
-_size_map = {"Petite": "15px", "Normale": "17px", "Grande": "20px"}
-st.markdown(f"<style>:root {{ --lyra-font-size: {_size_map[st.session_state.font_size]}; }}</style>", unsafe_allow_html=True)
-
-st.markdown(f"### ✨ LYRA • {st.session_state.cycle} — {st.session_state.niveau}")
-st.caption("Ta tutrice pédagogique : elle t'aide à comprendre, pas seulement à trouver la réponse")
-
-# --- Suggestions de démarrage façon Claude, sur conversation vide -----------
-suggestion_clicked = None
-if not current_messages():
-    prog = PROGRAMMES.get(st.session_state.niveau, "")
-    suggestions = [
-        f"Explique-moi une notion clé de {st.session_state.niveau} ({prog.split(',')[0].strip()})",
-        "Aide-moi à organiser une fiche de révision",
-        "Pose-moi une question pour tester mes connaissances",
-        "J'ai un exercice, comment je peux te le montrer ?"
-    ]
-    st.caption("Pour démarrer :")
-    scols = st.columns(2)
-    for i, s in enumerate(suggestions):
-        with scols[i % 2]:
-            if st.button(s, key=f"sugg_{i}", use_container_width=True):
-                suggestion_clicked = s
-
-for idx, m in enumerate(current_messages()):
-    with st.chat_message(m["role"]):
-        if m["role"] == "user":
-            is_last_user = idx == len(current_messages()) - 1 or (idx == len(current_messages()) - 2 and current_messages()[-1]["role"] == "assistant")
-            editing_key = f"editing_{idx}"
-            if is_last_user and st.session_state.get(editing_key, False):
-                new_text = st.text_area("Modifier ta question", value=m["content"], key=f"edit_area_{idx}", label_visibility="collapsed")
-                ecols = st.columns([1, 1, 6])
-                with ecols[0]:
-                    if st.button("✅ Renvoyer", key=f"save_edit_{idx}"):
-                        del current_messages()[idx:]
-                        current_messages().append({"role": "user", "content": new_text})
-                        st.session_state.regenerate_query = new_text
-                        st.session_state[editing_key] = False
-                        st.rerun()
-                with ecols[1]:
-                    if st.button("✖️ Annuler", key=f"cancel_edit_{idx}"):
-                        st.session_state[editing_key] = False
-                        st.rerun()
-            else:
-                st.markdown(m["content"])
-                if is_last_user:
-                    if st.button("✏️ Modifier", key=f"editbtn_{idx}"):
-                        st.session_state[editing_key] = True
-                        st.rerun()
-        if m["role"] == "assistant":
-            st.markdown(m["content"])
-            is_last = idx == len(current_messages()) - 1
-            action_cols = st.columns([1, 1, 1, 1, 1, 5]) if is_last else st.columns([1, 1, 1, 1, 6])
-            with action_cols[0]:
-                with st.popover("📋"):
-                    st.code(m["content"], language=None)
-            with action_cols[1]:
-                speak_button(m["content"], key=f"speak_{idx}")
-            feedback_key = f"feedback_{idx}"
-            with action_cols[2]:
-                if st.button("👍", key=f"up_{idx}"):
-                    st.session_state[feedback_key] = "up"
-            with action_cols[3]:
-                if st.button("👎", key=f"down_{idx}"):
-                    st.session_state[feedback_key] = "down"
-            if st.session_state.get(feedback_key) == "up":
-                st.caption("Merci pour ton retour 👍")
-            elif st.session_state.get(feedback_key) == "down":
-                st.caption("Merci, LYRA va essayer de faire mieux 👎")
-            if is_last:
-                with action_cols[4]:
-                    if st.button("🔄", key=f"regen_{idx}", help="Régénérer"):
-                        # Retrouve la dernière question de l'élève et relance la génération
-                        prev_user = next((mm["content"] for mm in reversed(current_messages()[:idx]) if mm["role"] == "user"), None)
-                        if prev_user:
-                            current_messages().pop()  # retire l'ancienne réponse
-                            st.session_state.regenerate_query = prev_user
-                        st.rerun()
-
-# --- Barre d'outils façon Claude : pilules sous la zone de saisie ----------
-st.markdown(f"""
-<div style="max-width:760px;margin:0 auto;display:flex;align-items:center;gap:10px;padding:6px 4px 2px 4px;">
-    <span style="background:#EAE7DC;border-radius:999px;padding:7px 16px;font-size:14px;color:#1F1E1D;">
-        🔒 {st.session_state.cycle} · {st.session_state.niveau}
-    </span>
-</div>
-""", unsafe_allow_html=True)
-tb_cols = st.columns([1, 1, 1, 1, 4])
-with tb_cols[0]:
-    with st.popover("➕"):
-        st.caption("Joindre un fichier")
-        st.file_uploader("📸 Photo exo", type=["jpg", "png", "jpeg"], key="up", label_visibility="collapsed")
-        st.camera_input("Caméra", key="cam", label_visibility="collapsed")
-        st.file_uploader("📄 Document (pdf/txt)", type=["pdf", "txt"], key="doc", label_visibility="collapsed")
-with tb_cols[1]:
-    web_on = st.toggle("🔎", value=False, help="Recherche web avant de répondre")
-with tb_cols[2]:
-    detailed_mode = st.toggle("🧠", value=False, help="Mode détaillé : explications plus développées")
-with tb_cols[3]:
-    with st.popover("🎙️"):
-        st.caption("Message vocal")
-        st.audio_input("Message vocal", key="aud", label_visibility="collapsed")
-if web_on and not SERPER_KEY:
-    st.caption("⚠️ Aucune clé SERPER_API_KEY configurée : la recherche web sera ignorée.")
-
-# --- Photo : import fiabilisé -----------------------------------------------
-# Corrections : distinction claire caméra/upload (au lieu d'un "or" ambigu),
-# aperçu visible pour confirmer que le fichier est bien reçu, message d'erreur
-# explicite en cas d'échec de lecture, et types acceptés élargis.
-up_file = st.session_state.get("up")
-cam_file = st.session_state.get("cam")
-img_source = up_file if up_file is not None else cam_file
-
-if img_source is not None:
-    try:
-        img_bytes = img_source.getvalue()
-        if not img_bytes:
-            raise ValueError("empty")
-        st.image(img_bytes, caption="Photo prête à être analysée", width=220)
-        if st.button("📸 Analyser la photo"):
-            with st.spinner("Analyse en cours..."):
-                ans = call_vision("Résous l'exercice sur l'image étape par étape", img_bytes, st.session_state.niveau)
-            current_messages().append({"role": "user", "content": "📸 [Photo d'exercice]"})
-            current_messages().append({"role": "assistant", "content": ans})
-            set_conv_title_from_first_message("Photo d'exercice")
-            st.rerun()
-    except Exception:
-        st.error("⚠️ Impossible de lire cette photo. Formats acceptés : JPG, JPEG, PNG. Si tu es sur iPhone et que la photo est en HEIC, convertis-la d'abord en JPG.")
-
-# Vocal
-aud = st.session_state.get("aud")
-if aud:
-    txt = transcribe(aud.getvalue())
-    if txt:
-        current_messages().append({"role": "user", "content": f"🎙️ {txt}"})
-        set_conv_title_from_first_message(txt)
-        if detect_crisis(txt):
-            current_messages().append({"role": "assistant", "content": CRISIS_MESSAGE})
-            st.rerun()
-        else:
-            with st.chat_message("assistant"):
-                full = st.write_stream(stream_text(txt, st.session_state.niveau, st.session_state.cycle, detailed=detailed_mode))
-            current_messages().append({"role": "assistant", "content": full})
-            st.rerun()
-    else:
-        st.warning("Je n'ai pas réussi à comprendre l'audio, réessaie ou écris ta question.")
-
-q = st.chat_input(f"Question de {st.session_state.niveau}...") or suggestion_clicked
-regen_q = st.session_state.pop("regenerate_query", None)
-
-if regen_q:
-    with st.chat_message("assistant"):
-        full = st.write_stream(stream_text(regen_q, st.session_state.niveau, st.session_state.cycle, detailed=detailed_mode))
-    current_messages().append({"role": "assistant", "content": full})
-    st.rerun()
-
-if q:
-    doc_text = ""
-    doc_file = st.session_state.get("doc")
-    if doc_file is not None:
-        doc_text = extract_document_text(doc_file)
-
-    # --- Recherche web optionnelle, injectée comme contexte supplémentaire ---
-    if web_on and SERPER_KEY:
-        with st.spinner("🔎 Recherche en cours..."):
-            web_results, status = web_search(q)
-        if status == "ok":
-            doc_text = (doc_text + "\n\n" if doc_text else "") + f"[Résultats de recherche web]\n{web_results}"
-
-    current_messages().append({"role": "user", "content": q + (f"\n\n📄 *(avec {doc_file.name})*" if doc_file is not None else "")})
-    set_conv_title_from_first_message(q)
-    with st.chat_message("user"):
-        st.markdown(q)
-
-    if detect_crisis(q):
-        current_messages().append({"role": "assistant", "content": CRISIS_MESSAGE})
-    else:
-        with st.chat_message("assistant"):
-            full = st.write_stream(stream_text(q, st.session_state.niveau, st.session_state.cycle, extra_context=doc_text, detailed=detailed_mode))
-        current_messages().append({"role": "assistant", "content": full})
-    st.rerun()
-
-# --- Artifacts : exporter la dernière réponse en fichier téléchargeable -----
-msgs = current_messages()
-if msgs and msgs[-1]["role"] == "assistant":
-    exp_cols = st.columns([1, 1, 6])
-    with exp_cols[0]:
-        st.download_button(
-            "📥 Markdown",
-            data=msgs[-1]["content"],
-            file_name="lyra_reponse.md",
-            mime="text/markdown"
-        )
-    with exp_cols[1]:
-        pdf_bytes = build_pdf(msgs[-1]["content"])
-        if pdf_bytes:
-            st.download_button(
-                "📄 PDF",
-                data=pdf_bytes,
-                file_name="lyra_reponse.pdf",
-                mime="application/pdf"
-            )
-        else:
-            st.caption("Export PDF indisponible (fpdf2 non installé)")
-
-st.markdown('<div class="lyra-footer">LYRA est une IA et peut faire des erreurs — vérifie les points importants avec ton professeur.</div>', unsafe_allow_html=True)
+   
