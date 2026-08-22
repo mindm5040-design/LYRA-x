@@ -82,31 +82,6 @@ div[data-baseweb="checkbox"] span, .stToggle {accent-color:#C15F3C!important;}
 .conv-btn button {
     text-align:left!important; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
-
-/* Empêche les rangées d'icônes (actions sous les réponses, barre d'outils)
-   de s'empiler verticalement sur mobile — les garde compactes et alignées,
-   comme la barre d'icônes de Claude. */
-div[data-testid="stHorizontalBlock"] {
-    flex-wrap: nowrap!important;
-    gap: 6px!important;
-    align-items: center!important;
-}
-div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
-    width: fit-content!important;
-    min-width: 0!important;
-    flex: 0 0 auto!important;
-}
-div[data-testid="stHorizontalBlock"] .stButton button,
-div[data-testid="stHorizontalBlock"] .stDownloadButton button,
-div[data-testid="stHorizontalBlock"] .stPopover button {
-    padding: 6px 10px!important;
-    min-height: 34px!important;
-    font-size: 14px!important;
-    white-space: nowrap!important;
-}
-div[data-testid="stHorizontalBlock"] .stToggle {
-    transform: scale(0.85);
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -379,4 +354,25 @@ def web_search_snippet(query: str) -> str:
         r = requests.get(
             "https://api.duckduckgo.com/",
             params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
-   
+            timeout=8
+        )
+        r.raise_for_status()
+        data = r.json()
+        parts = []
+        if data.get("AbstractText"):
+            parts.append(data["AbstractText"])
+        for topic in data.get("RelatedTopics", [])[:3]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                parts.append(topic["Text"])
+        return "\n".join(parts)[:1500]
+    except requests.exceptions.RequestException:
+        return ""
+
+# --- 10. Upload de documents (pdf/txt) façon ChatGPT ------------------------
+# --- Lecture vocale des réponses (synthèse vocale du navigateur, sans clé API) ---
+def speak_button(text, key):
+    safe_text = json.dumps(text)
+    html = f"""
+    <button id="lyra-speak-{key}" style="
+        background:#ffffff;color:#1F1E1D;border:1px solid #E0DDD1;border-radius:10px;
+        padding:6px 12px;font-size:13px;cursor:pointer
